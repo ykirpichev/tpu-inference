@@ -58,6 +58,9 @@ _VLLM_PREFERRED_ARCHITECTURES: frozenset[str] = frozenset({
     "Qwen3MoeForCausalLM",
     "KimiK25ForConditionalGeneration",
     "Qwen3_5MoeForConditionalGeneration",
+    # Dense Qwen3.5 / Qwen3.8 (Qwen/Qwen3.8-27B). No JAX class exists.
+    # "auto" must select vLLM; the flax path has nothing to load.
+    "Qwen3_5ForConditionalGeneration",
 })
 
 # List of architectures that don't have pipeline parallelism support in jax yet.
@@ -319,6 +322,15 @@ def get_flax_model(
     mesh: Mesh,
     is_draft_model: bool = False,
 ) -> ModelInterface:
+    if is_draft_model:
+        hf_config = vllm_config.speculative_config.draft_model_config.hf_config
+    else:
+        hf_config = vllm_config.model_config.hf_config
+    # Resolve before any dtype rewrite. An unknown architecture raises
+    # UnsupportedArchitectureError and get_model falls back to vLLM. Doing
+    # that rewrite first leaves a JAX dtype on the torch model config.
+    model_class = _get_model_architecture(hf_config)
+
     original_dtype = vllm_config.model_config.dtype
     model_dtype = to_jax_dtype(original_dtype)
     vllm_config.model_config.dtype = model_dtype
@@ -327,13 +339,6 @@ def get_flax_model(
     # Only perform qwix quantization if it is jax model.
     if vllm_config.model_config:
         update_vllm_config_for_qwix_quantization(vllm_config)
-
-    if is_draft_model:
-        model_class = _get_model_architecture(
-            vllm_config.speculative_config.draft_model_config.hf_config)
-    else:
-        model_class = _get_model_architecture(
-            vllm_config.model_config.hf_config)
 
     # Instantiate pooler if needed for Hybrid Path
     is_pooling = vllm_config.model_config.runner_type == "pooling"

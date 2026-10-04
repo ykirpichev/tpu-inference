@@ -166,6 +166,52 @@ def test_resolve_model_impl_type_auto(is_draft):
     mock_res.assert_called_once_with(cfg, is_draft)
 
 
+def _architecture_config(architecture: str) -> MagicMock:
+    cfg = MagicMock()
+    cfg.load_config.load_format = "auto"
+    cfg.model_config.hf_config.architectures = [architecture]
+    return cfg
+
+
+@pytest.mark.parametrize("architecture,expected", [
+    ("Qwen3_5ForConditionalGeneration", "vllm"),
+    ("Qwen3_5MoeForConditionalGeneration", "vllm"),
+    ("Qwen3ForCausalLM", "flax_nnx"),
+])
+def test_resolve_qwen3_5_dense_routes_to_vllm(architecture, expected):
+    """Qwen/Qwen3.8-27B is Qwen3_5ForConditionalGeneration. It has no JAX
+    model, so auto must select vLLM. Qwen3ForCausalLM still has one."""
+    impl = model_loader.resolve_model_architecture(
+        _architecture_config(architecture), is_draft_model=False)
+    assert impl == expected
+
+
+def test_resolve_qwen3_5_dense_draft_routes_to_vllm():
+    cfg = MagicMock()
+    cfg.load_config.load_format = "auto"
+    cfg.speculative_config.draft_model_config.hf_config.architectures = [
+        "Qwen3_5ForConditionalGeneration"
+    ]
+    impl = model_loader.resolve_model_architecture(cfg, is_draft_model=True)
+    assert impl == "vllm"
+
+
+def test_get_flax_model_unknown_arch_keeps_torch_dtype():
+    """Architecture lookup happens before the JAX dtype rewrite, so a miss
+    does not poison the vLLM fallback."""
+    cfg = MagicMock()
+    cfg.model_config.dtype = torch.bfloat16
+    cfg.model_config.hf_config.architectures = [
+        "Qwen3_5ForConditionalGeneration"
+    ]
+    with patch.object(
+            model_loader, "_get_model_architecture",
+            side_effect=model_loader.UnsupportedArchitectureError("missing")):
+        with pytest.raises(model_loader.UnsupportedArchitectureError):
+            model_loader.get_flax_model(cfg, rng=None, mesh=None)
+    assert cfg.model_config.dtype is torch.bfloat16
+
+
 @pytest.fixture(autouse=True)
 def clear_model_registry_after_test():
     """Clear the model registry after each test to prevent side effects."""
