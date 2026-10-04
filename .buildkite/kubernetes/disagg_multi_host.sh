@@ -235,7 +235,12 @@ start_instance() {
     # sharing one collide and workers attach to the wrong raylet.
     local cmd="ray start --block --temp-dir=${tmpdir}-${i}"
     if [ "$i" -eq 0 ]; then
-      cmd="$cmd --head --port=${ray_port}"
+      # No dashboard: nothing here uses it, and both heads would default to
+      # port 8265. `ray start` test-binds that port and the dashboard process
+      # binds it seconds later, so two heads started close together can both
+      # pass the test and race for the port. The loser's dashboard exits, and
+      # --block then kills every process of that head, GCS included.
+      cmd="$cmd --head --port=${ray_port} --include-dashboard=false"
       [ "$role" = "decode" ] && cmd="$cmd --min-worker-port=20000 --max-worker-port=29999"
     else
       cmd="$cmd --address=127.0.0.1:${ray_port}"
